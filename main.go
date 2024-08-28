@@ -10,8 +10,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -20,97 +18,8 @@ const (
 	Retry
 )
 
-// Backend holds the data about a server
-type Backend struct {
-	URL          *url.URL
-	Alive        bool
-	mux          sync.RWMutex
-	ReverseProxy *httputil.ReverseProxy
-}
-
 var serverPool ServerPool
 
-// SetAlive for this backend
-func (b *Backend) SetAlive(alive bool) {
-	b.mux.Lock()
-	b.Alive = alive
-	b.mux.Unlock()
-}
-
-// IsAlive returns true when backend is alive
-func (b *Backend) IsAlive() (alive bool) {
-	b.mux.RLock()
-	log.Println(b.Alive)
-	alive = b.Alive
-	b.mux.RUnlock()
-	return
-}
-
-// ServerPool holds information about reachable backends
-type ServerPool struct {
-	backends []*Backend
-	current  uint64
-}
-
-// AddBackend to the server pool
-func (s *ServerPool) AddBackend(backend *Backend) {
-	s.backends = append(s.backends, backend)
-}
-
-// NextIndex atomically increase the counter and return an index
-func (s *ServerPool) NextIndex() int {
-	for {
-		current := atomic.LoadUint64(&s.current)
-		// increase the counter in a circular fashion
-		next := (current + 1) % uint64(len(s.backends))
-		if atomic.CompareAndSwapUint64(&s.current, current, next) {
-			return int(next)
-		}
-	}
-}
-
-// MarkBackendStatus changes a status of a backend
-func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
-	for _, b := range s.backends {
-		if b.URL.String() == backendUrl.String() {
-			b.SetAlive(false)
-			break
-		}
-	}
-}
-
-// GetNextPeer returns next active peer to take a connection
-func (s *ServerPool) GetNextPeer() *Backend {
-	// loop entire backends to find out an Alive backend
-	next := s.NextIndex()
-	l := len(s.backends) + next // start from next and move a full cycle
-	for i := next; i < l; i++ {
-		idx := i % len(s.backends)     // take an index by modding
-		if s.backends[idx].IsAlive() { // if we have an alive backend, use it and store if its not the original one
-			if i != next {
-				atomic.StoreUint64(&s.current, uint64(idx))
-			}
-			return s.backends[idx]
-		}
-	}
-	return nil
-}
-
-// HealthCheck pings the backends and update the status
-func (s *ServerPool) HealthCheck() {
-	log.Printf("Health check started for %d backends\n", len(s.backends))
-	for _, b := range s.backends {
-		status := "up"
-		alive := isBackendAlive(b.URL)
-		b.SetAlive(alive)
-		if !alive {
-			status = "down"
-		}
-		log.Printf("%s [%s]\n", b.URL, status)
-	}
-}
-
-// GetAttemptsFromContext returns the attempts for request
 func GetAttemptsFromContext(r *http.Request) int {
 	if attempts, ok := r.Context().Value(Attempts).(int); ok {
 		return attempts
@@ -118,7 +27,6 @@ func GetAttemptsFromContext(r *http.Request) int {
 	return 1
 }
 
-// GetRetryFromContext returns the retries for request
 func GetRetryFromContext(r *http.Request) int {
 	if retry, ok := r.Context().Value(Retry).(int); ok {
 		return retry
@@ -126,7 +34,6 @@ func GetRetryFromContext(r *http.Request) int {
 	return 0
 }
 
-// lb load balances the incoming request
 func lb(w http.ResponseWriter, r *http.Request) {
 	attempts := GetAttemptsFromContext(r)
 	if attempts > 3 {
@@ -143,7 +50,6 @@ func lb(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Service not available", http.StatusServiceUnavailable)
 }
 
-// isAlive checks whether a backend is Alive by establishing a TCP connection
 func isBackendAlive(u *url.URL) bool {
 	timeout := 2 * time.Second
 	conn, err := net.DialTimeout("tcp", u.Host, timeout)
@@ -155,7 +61,6 @@ func isBackendAlive(u *url.URL) bool {
 	return true
 }
 
-// healthCheck runs a routine for check status of the backends every 2 mins
 func healthCheck() {
 	t := time.NewTicker(time.Second * 20)
 	for {
@@ -179,7 +84,6 @@ func main() {
 		log.Fatal("Please provide one or more backends to load balance")
 	}
 
-	// parse servers
 	tokens := strings.Split(serverList, ",")
 	for _, tok := range tokens {
 		serverUrl, err := url.Parse(tok)
@@ -200,10 +104,8 @@ func main() {
 				return
 			}
 
-			// after 3 retries, mark this backend as down
 			serverPool.MarkBackendStatus(serverUrl, false)
 
-			// if the same request routing for few attempts with different backends, increase the count
 			attempts := GetAttemptsFromContext(request)
 			log.Printf("%s(%s) Attempting retry %d\n", request.RemoteAddr, request.URL.Path, attempts)
 			ctx := context.WithValue(request.Context(), Attempts, attempts+1)
@@ -218,13 +120,11 @@ func main() {
 		log.Printf("Configured server: %s\n", serverUrl)
 	}
 
-	// create http server
 	server := http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: http.HandlerFunc(lb),
 	}
 
-	// start health checking
 	go healthCheck()
 
 	log.Printf("Load Balancer started at :%d\n", port)
