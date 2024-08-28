@@ -10,7 +10,7 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}",
-      "args": ["--backends", "http://web:80"]
+      "args": ["--backends", "http://localhost:80"]
     }
   ]
 }

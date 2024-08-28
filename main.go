@@ -106,7 +106,6 @@ func (s *ServerPool) HealthCheck() {
 		if !alive {
 			status = "down"
 		}
-		log.Printf("Backend %v is not alive")
 		log.Printf("%s [%s]\n", b.URL, status)
 	}
 }
@@ -146,7 +145,7 @@ func lb(w http.ResponseWriter, r *http.Request) {
 
 // isAlive checks whether a backend is Alive by establishing a TCP connection
 func isBackendAlive(u *url.URL) bool {
-	timeout := 2 * time.Millisecond
+	timeout := 2 * time.Second
 	conn, err := net.DialTimeout("tcp", u.Host, timeout)
 	if err != nil {
 		log.Println("Site unreachable, error: ", err)
@@ -158,7 +157,7 @@ func isBackendAlive(u *url.URL) bool {
 
 // healthCheck runs a routine for check status of the backends every 2 mins
 func healthCheck() {
-	t := time.NewTicker(time.Microsecond * 2)
+	t := time.NewTicker(time.Second * 20)
 	for {
 		select {
 		case <-t.C:
